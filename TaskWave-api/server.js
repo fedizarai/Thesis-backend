@@ -40,7 +40,6 @@ const pool = new Pool({
 
 
 
-
 app.get('/users', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM users;');
@@ -72,7 +71,7 @@ app.post('/users', async (req, res) => {
 
 
 
-
+///Registartionnnnnn
 
 app.post('/register', (req, res) => {
   const { name, username, birthdate, gender, reportTo, address, role, employee_id, email, password, mobile, joindate, project, position } = req.body;
@@ -113,7 +112,7 @@ app.post('/register', (req, res) => {
 
 
 
-
+///Signinnnnnnnnnnnn
 
 app.post('/signin', (req, res) => {
   const { email, password } = req.body;
@@ -145,6 +144,9 @@ app.post('/signin', (req, res) => {
 
 
 
+
+//Profileeeeeeeee
+
 app.get('/profile/:id', async (req, res) => {
   const { id } = req.params;
 
@@ -161,8 +163,6 @@ app.get('/profile/:id', async (req, res) => {
     res.status(500).send('Server error');
   }
 });
-
-
 
 
 
@@ -259,6 +259,9 @@ app.post('/update-profile', async (req, res) => {
 
 
 
+
+//Employeeeeeee
+
 app.post('/addEmployee', async (req, res) => {
   const { name, role, employee_id, email, position, report_to, birthdate, join_date } = req.body;
 
@@ -284,7 +287,6 @@ app.post('/addEmployee', async (req, res) => {
     res.status(500).json({ error: 'Server error during employee addition' });
   }
 });
-
 
 
 
@@ -323,8 +325,6 @@ app.put('/editEmployee/:id', async (req, res) => {
 
 
 
-
-
 app.delete('/deleteEmployee/:id', async (req, res) => {
   const id = req.params.id;
   try {
@@ -340,6 +340,87 @@ app.delete('/deleteEmployee/:id', async (req, res) => {
   }
 });
 
+
+
+
+
+//Projectsssssssss
+
+app.get('/projects', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        p.id,
+        p.title,
+        p.description,
+        p.startDate,
+        p.workingHours,
+        p.deadline,
+        json_build_object(
+          'name', u2.name,
+          'role', u2.role,
+          'image', u2.image
+        ) AS leaderName,
+        u1.name AS creator_name,
+        p.priority,
+        p.activeStatus,
+        (
+          SELECT json_agg(DISTINCT tasks)
+          FROM (
+            SELECT
+              pt.id,
+              pt.status,
+              u3.name AS assignee,
+              pt.description,
+              pt.deadline
+            FROM 
+              Project_Tasks pt
+              LEFT JOIN users u3 ON pt.assignee = u3.id
+            WHERE 
+              pt.project_id = p.id
+          ) AS tasks
+        ) AS tasks,
+        (
+          SELECT json_agg(DISTINCT files)
+          FROM (
+            SELECT
+              f.name,
+              u4.name AS creator,
+              f.size,
+              f.date,
+              f.src
+            FROM 
+              Files f
+              LEFT JOIN users u4 ON f.creator = u4.id
+            WHERE 
+              f.project_id = p.id
+          ) AS files
+        ) AS files,
+        (
+          SELECT json_agg(
+            json_build_object(
+              'name', u5.name,
+              'role', u5.role,
+              'image', u5.image
+            )
+          ) 
+          FROM users u5
+          WHERE u5.project_id = p.id
+        ) AS team
+      FROM 
+        Projects p 
+        LEFT JOIN users u1 ON p.creator = u1.id
+        LEFT JOIN users u2 ON p.leaderName = u2.id
+      GROUP BY
+        p.id, p.title, p.description, p.startDate, p.workingHours, p.deadline,
+        u1.name, u1.role, u1.image, u2.name, u2.role, u2.image, p.priority, p.activeStatus;
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Server error');
+  }
+});
 
 
 
