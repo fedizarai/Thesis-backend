@@ -3,6 +3,9 @@ const bodyParser= require('body-parser');
 const cors= require('cors');
 const bcrypt = require('bcrypt-nodejs');
 const { Pool } = require('pg');
+const multer = require('multer');
+const path = require('path');
+const { Server } = require("socket.io");
 
 
 
@@ -16,6 +19,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 app.use(bodyParser.json({ limit: '50mb' }));
+
 app.use(cors());
 
 app.use((err, req, res, next) => {
@@ -27,6 +31,7 @@ app.use((err, req, res, next) => {
     res.status(500).send('Internal Server Error'); // Handle other errors
   }
 });
+app.use('/uploads', express.static('uploads'));
 
 const pool = new Pool({
   user: 'postgres',
@@ -423,11 +428,153 @@ app.get('/projects', async (req, res) => {
 });
 
 
+// // Define a function to update the project_id column of users
+// const updateUsersProjectId = async (projectId, team) => {
+//   try {
+//     // Update the project_id column for users with matching team IDs
+//     await User.update({ project_id: projectId }, {
+//       where: {
+//         id: team
+//       }
+//     });
+//     console.log('Project IDs updated for users:', team);
+//   } catch (error) {
+//     console.error('Error updating project IDs for users:', error);
+//     throw error; // You can handle the error based on your application's requirements
+//   }
+// };
+
+
+// Set up storage for multer
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+      cb(null, 'uploads'); // Save files to the 'uploads' folder
+    },
+    filename: function (req, file, cb) {
+      cb(null, Date.now() + '-' + file.originalname); // Use unique filenames
+    }
+});
+
+// Create multer instance
+const upload = multer({ storage: storage });
+
+
+app.post('/projects', upload.array('files'), async (req, res) => {
+ 
+  const { title, description,  workinghours, creator, leadername, priority, activestatus, team } = req.body;
+  const files = req.files; // Accessing files from multer
+  console.log('Body:', req.body);
+  console.log('Files:', req.files);
+
+  let { tasks } = req.body;
+  
+  
+  // Parse tasks if it's a string
+  if (typeof tasks === 'string') {
+    try {
+      tasks = JSON.parse(tasks);
+    } catch (err) {
+      console.error('Error parsing tasks:', err);
+      return res.status(400).json({ error: 'Invalid tasks format' });
+    }
+  }
+
+  console.log(typeof tasks, tasks);
+
+
+  const startdate = new Date(req.body.startdate).toISOString();
+  const deadline = new Date(req.body.deadline).toISOString();
+   const baseUrl = req.protocol + '://' + req.get('host');
+
+  try {
+
+    // Basic form validation
+    if (!title || !description || !startdate || !workinghours || !deadline || !creator || !leadername || !priority || !activestatus || !team) {
+      console.error('Validation error: Please fill in all required fields');
+      return res.status(400).json({ error: 'Please fill in all required fields' });
+    }
+
+    // Additional validation logic can be added here
 
 
 
 
 
-app.listen(3001, ()=> {
+    // Insert the project data into the database
+    const projectResult = await pool.query(
+      'INSERT INTO projects (title, description, startdate, workinghours, deadline, creator, leadername, priority, activestatus) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *;',
+      [title, description, startdate, workinghours, deadline, creator, leadername, priority, activestatus]
+    );
+
+    const project = projectResult.rows[0];
+    const projectId = project.id;
+
+    // Update the project_id column for users in the team
+    // await updateUsersProjectId(projectId, team);
+
+
+    const fileData = files.map(file => ({
+      name: file.originalname,
+      size: file.size,
+      date: new Date().toISOString(),
+      src: `${baseUrl}/uploads/${file.filename}` // Store file path instead of Blob URL
+    }));
+
+    // Insert files into the database
+    if (fileData && fileData.length > 0) {
+      const fileInsertQueries = fileData.map(file => {
+        return pool.query(
+          'INSERT INTO files (name, size, date, src, project_id) VALUES ($1, $2, $3, $4, $5);',
+          [file.name, file.size, new Date().toISOString(), file.src, projectId]
+        );
+      });
+      await Promise.all(fileInsertQueries);
+    }
+
+    // Insert tasks into the database
+    if (tasks && tasks.length > 0) {
+      await Promise.all(tasks.map(task => {
+        return pool.query(
+          'INSERT INTO Project_Tasks (project_id, description, deadline,status) VALUES ($1, $2, $3, $4);',
+          [projectId, task.description, new Date(task.deadline).toISOString(),0]
+        );
+      }));
+    }
+
+    // Send a success response with the created project object
+    res.status(201).json(project);
+  } catch (error) {
+    // If an error occurs, send an error response
+    console.error('Error creating project:', error);
+    res.status(500).json({ error: 'Failed to create project' });
+  }
+});
+
+
+
+
+
+
+
+
+
+const server = app.listen(3001, ()=> {
   console.log('app is runnning on port 3001');
 })
+
+const io = new Server(server, {
+    cors: {corsOptions},
+});
+
+io.on('connection', (socket) => {
+    console.log('New User connected');
+
+    socket.on('onTextChange', (data) => {
+        console.log(`Message from client: ${data.text}, whoose id is: ${data.from}`);
+        io.emit('receive_message', data);
+    });
+
+    socket.on('disconnect', () => {
+        console.log('User disconnected');
+    });
+});
