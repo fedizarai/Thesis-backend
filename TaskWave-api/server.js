@@ -6,6 +6,7 @@ const { Pool } = require('pg');
 const multer = require('multer');
 const path = require('path');
 const { Server } = require("socket.io");
+const cookieParser= require('cookie-parser');
 
 
 
@@ -17,10 +18,9 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-
+app.use(cookieParser());
 app.use(bodyParser.json({ limit: '50mb' }));
 
-app.use(cors());
 
 app.use((err, req, res, next) => {
   if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
@@ -33,6 +33,18 @@ app.use((err, req, res, next) => {
 });
 app.use('/uploads', express.static('uploads'));
 
+
+
+app.use((req, res, next) => {
+    console.log(req.headers.cookie);  // Log the Cookie header
+    next();
+});
+app.use((req, res, next) => {
+    console.log('Cookies:', req.cookies);  // This will show all cookies
+    next();
+});
+
+
 const pool = new Pool({
   user: 'postgres',
   host: 'localhost',
@@ -42,8 +54,21 @@ const pool = new Pool({
 });
 
 
+ const server = app.listen(3001, ()=> {
+  console.log('app is runnning on port 3001');
+})
+
+/////////CHATTTT
+
+const io = new Server(server, {
+    cors: corsOptions
+});
+ 
 
 
+
+
+////USERS
 
 app.get('/users', async (req, res) => {
   try {
@@ -131,17 +156,35 @@ app.post('/signin', (req, res) => {
     if (result.rows.length > 0) {
       const user = result.rows[0];
 
-      // Using bcrypt-nodejs to compare password
       if (bcrypt.compareSync(password, user.password)) {
-        res.json('success'); // Passwords match
+        // Setting a cookie named 'userid' with the user's ID, expires after 1 hour
+        res.cookie('userid', user.id, {
+                  maxAge: 3600000,  // 3600000 ms = 1 hour
+                  httpOnly: false,   // Now the cookie is accessible via JavaScript
+                  secure: false,  // Use secure in production (cookie over HTTPS)
+                  sameSite: 'Lax'    // Lax same-site policy
+            });
+        
+        // Log the cookie that has been set
+        
+
+        res.json({ message: 'success' }); // Indicate success if passwords match
       } else {
-        res.status(400).json('error logging in'); // Passwords do not match
+        res.status(400).json({ message: 'error logging in' }); // Indicate error if passwords do not match
       }
     } else {
-      res.status(400).json('User not found');
+      res.status(400).json({ message: 'User not found' }); // Indicate error if user is not found
     }
   });
 });
+
+//Logout
+app.get('/logout', (req, res) => {
+    res.cookie('userid', '', { expires: new Date(0) }); // Clear the userid cookie
+    res.send('Logged out successfully');
+});
+
+
 
 
 
@@ -168,6 +211,32 @@ app.get('/profile/:id', async (req, res) => {
     res.status(500).send('Server error');
   }
 });
+
+
+app.get('/profile', async (req, res) => {
+    const userIdFromCookie = req.cookies['userid']; // Retrieve the user ID from the cookie
+
+
+    if (userIdFromCookie) {
+        try {
+            const queryResult = await pool.query('SELECT * FROM users WHERE id = $1', [userIdFromCookie]);
+            if (queryResult.rows.length > 0) {
+                const user = queryResult.rows[0];
+                res.json(user);
+            } else {
+                res.status(404).json('No such user');
+            }
+        } catch (err) { 
+            console.error(err);
+            res.status(500).send('Server error');
+        }
+    } else {
+        // If there is no user ID in the cookie, return an unauthorized error
+        console.log('No user ID found in cookie');
+        res.status(403).json({ message: 'Unauthorized access: No user ID found in cookie' });
+    }
+});
+
 
 
 
@@ -362,6 +431,7 @@ app.get('/projects', async (req, res) => {
         p.workingHours,
         p.deadline,
         json_build_object(
+          'id', u2.id,
           'name', u2.name,
           'role', u2.role,
           'image', u2.image
@@ -376,6 +446,7 @@ app.get('/projects', async (req, res) => {
               pt.id,
               pt.status,
               u3.name AS assignee,
+              u3.image AS assignee_image,
               pt.description,
               pt.deadline
             FROM 
@@ -404,13 +475,15 @@ app.get('/projects', async (req, res) => {
         (
           SELECT json_agg(
             json_build_object(
+              'id', u5.id,
               'name', u5.name,
               'role', u5.role,
               'image', u5.image
             )
           ) 
-          FROM users u5
-          WHERE u5.project_id = p.id
+          FROM project_team pm
+          JOIN users u5 ON pm.user_id = u5.id
+          WHERE pm.project_id = p.id
         ) AS team
       FROM 
         Projects p 
@@ -418,7 +491,7 @@ app.get('/projects', async (req, res) => {
         LEFT JOIN users u2 ON p.leaderName = u2.id
       GROUP BY
         p.id, p.title, p.description, p.startDate, p.workingHours, p.deadline,
-        u1.name, u1.role, u1.image, u2.name, u2.role, u2.image, p.priority, p.activeStatus;
+        u1.name, u2.id, u2.name, u2.role, u2.image, p.priority, p.activeStatus;
     `);
     res.json(result.rows);
   } catch (err) {
@@ -427,22 +500,6 @@ app.get('/projects', async (req, res) => {
   }
 });
 
-
-// // Define a function to update the project_id column of users
-// const updateUsersProjectId = async (projectId, team) => {
-//   try {
-//     // Update the project_id column for users with matching team IDs
-//     await User.update({ project_id: projectId }, {
-//       where: {
-//         id: team
-//       }
-//     });
-//     console.log('Project IDs updated for users:', team);
-//   } catch (error) {
-//     console.error('Error updating project IDs for users:', error);
-//     throw error; // You can handle the error based on your application's requirements
-//   }
-// };
 
 
 // Set up storage for multer
@@ -458,7 +515,7 @@ const storage = multer.diskStorage({
 // Create multer instance
 const upload = multer({ storage: storage });
 
-
+//create
 app.post('/projects', upload.array('files'), async (req, res) => {
  
   const { title, description,  workinghours, creator, leadername, priority, activestatus, team } = req.body;
@@ -509,8 +566,15 @@ app.post('/projects', upload.array('files'), async (req, res) => {
     const project = projectResult.rows[0];
     const projectId = project.id;
 
-    // Update the project_id column for users in the team
-    // await updateUsersProjectId(projectId, team);
+    // Parse the team members from the request and insert into project_members
+    const teamMembers = team.split(',').map(id => parseInt(id.trim())); // Convert to array of integers
+    const memberInsertQueries = teamMembers.map(userId => {
+      return pool.query(
+        'INSERT INTO project_team (user_id, project_id) VALUES ($1, $2);',
+        [userId, projectId]
+      );
+    });
+    await Promise.all(memberInsertQueries);
 
 
     const fileData = files.map(file => ({
@@ -551,30 +615,296 @@ app.post('/projects', upload.array('files'), async (req, res) => {
 });
 
 
+//update
+app.put('/projects/:projectId', upload.none(), async (req, res) => {
+    const { projectId } = req.params;
+    const { title, description, startdate, workinghours, deadline, creator, leadername, priority, activestatus, team } = req.body;
+    let tasks;
 
+    if (typeof req.body.tasks === 'string') {
+        try {
+            tasks = JSON.parse(req.body.tasks);
+        } catch (err) {
+            console.error('Error parsing tasks:', err);
+            return res.status(400).json({ error: 'Invalid tasks format', details: err.message });
+        }
+    }
 
+    try {
+        await pool.query('BEGIN');
 
+        const updateProjectQuery = `
+            UPDATE projects SET
+                title = $1, description = $2, startdate = $3, workinghours = $4,
+                deadline = $5, creator = $6, leadername = $7, priority = $8,
+                activestatus = $9
+            WHERE id = $10 RETURNING *;
+        `;
+        const projectValues = [
+            title, description, new Date(startdate).toISOString(), workinghours,
+            new Date(deadline).toISOString(), creator, leadername, priority,
+            activestatus, projectId
+        ];
+        const projectResult = await pool.query(updateProjectQuery, projectValues);
 
+        if (projectResult.rowCount === 0) {
+            await pool.query('ROLLBACK');
+            return res.status(404).json({ error: 'Project not found or no data changed' });
+        }
 
+        // Retrieve existing tasks for the project
+        const { rows: existingTasks } = await pool.query('SELECT id FROM project_tasks WHERE project_id = $1', [projectId]);
+        const existingTaskIds = existingTasks.map(task => task.id);
 
+        // Determine tasks to delete
+        const incomingTaskIds = tasks.filter(task => task.id).map(task => task.id);
+        const tasksToDelete = existingTaskIds.filter(id => !incomingTaskIds.includes(id));
 
-const server = app.listen(3001, ()=> {
-  console.log('app is runnning on port 3001');
-})
+        // Delete tasks not included in the incoming list
+        if (tasksToDelete.length > 0) {
+            await pool.query('DELETE FROM project_tasks WHERE id = ANY($1)', [tasksToDelete]);
+        }
 
-const io = new Server(server, {
-    cors: {corsOptions},
+        // Insert new tasks and update existing ones
+        tasks.forEach(async task => {
+            if (task.id && existingTaskIds.includes(task.id)) {
+                // Update existing task
+                const updateTaskQuery = `
+                    UPDATE project_tasks SET
+                        description = $1, deadline = $2
+                    WHERE id = $3 AND project_id = $4;
+                `;
+                await pool.query(updateTaskQuery, [task.description, new Date(task.deadline).toISOString(), task.id, projectId]);
+            } else {
+                // Insert new task
+                const insertTaskQuery = `
+                    INSERT INTO project_tasks (project_id, description, deadline)
+                    VALUES ($1, $2, $3);
+                `;
+                await pool.query(insertTaskQuery, [projectId, task.description, new Date(task.deadline).toISOString()]);
+            }
+        });
+
+        // Handle team members
+        // Update logic for team members similar to previous examples
+        
+        await pool.query('COMMIT');
+        res.status(200).json(projectResult.rows[0]);
+    } catch (error) {
+        console.error('Transaction rolled back due to an error:', error);
+        await pool.query('ROLLBACK');
+        res.status(500).json({ error: 'Database operation failed', details: error.message });
+    }
 });
 
-io.on('connection', (socket) => {
-    console.log('New User connected');
+//delete
+app.delete('/projects/:id', async (req, res) => {
+  const projectId = req.params.id;
+  try {
+    // Delete tasks associated with the project from the project_tasks table
+    await pool.query('DELETE FROM project_tasks WHERE project_id = $1', [projectId]);
 
-    socket.on('onTextChange', (data) => {
-        console.log(`Message from client: ${data.text}, whoose id is: ${data.from}`);
-        io.emit('receive_message', data);
+    // Delete files associated with the project (assuming you have a files table)
+    await pool.query('DELETE FROM files WHERE project_id = $1', [projectId]);
+
+    // Delete project team members (assuming you have a project_team_members table)
+    await pool.query('DELETE FROM project_team WHERE project_id = $1', [projectId]);
+
+    // Now delete the project from the projects table
+    await pool.query('DELETE FROM projects WHERE id = $1', [projectId]);
+
+    // Fetch the updated list of projects and send it in the response
+    const updatedProjectsResult = await pool.query('SELECT * FROM projects');
+    const updatedProjects = updatedProjectsResult.rows;
+    res.json(updatedProjects);
+  } catch (err) {
+    console.error('Error deleting project:', err);
+    res.status(500).send('Server error during project deletion');
+  }
+});
+
+
+//upload solution
+app.post('/projects/:projectId/tasks/:taskId/solutionFiles', upload.array('files'), async (req, res) => {
+    console.log('Cookies at the start:', req.cookies);
+    const { projectId, taskId } = req.params;
+    const taskResult = await pool.query('SELECT description FROM project_tasks WHERE id = $1', [taskId]);
+    const taskName =taskResult.rows[0].description
+    console.log('projectId',projectId);
+
+    const userIdFromCookie = req.cookies['userid']; 
+    console.log('creatorId', userIdFromCookie);
+
+    const files = req.files;
+    const baseUrl = req.protocol + '://' + req.get('host');
+
+    try {
+        // Ensure projectId and taskId are provided
+        if (!projectId || !taskId) {
+            return res.status(400).json({ error: 'Project ID and Task ID must be provided' });
+        }
+
+        // Check if the project and task exist
+        const projectCheck = await pool.query('SELECT * FROM projects WHERE id = $1', [projectId]);
+        const taskCheck = await pool.query('SELECT * FROM project_tasks WHERE id = $1', [taskId]);
+
+        if (projectCheck.rows.length === 0 || taskCheck.rows.length === 0) {
+            return res.status(404).json({ error: 'Project or Task not found' });
+        }
+
+        // Handle file data
+        const fileData = files.map(file => ({
+            name: file.originalname,
+            size: file.size,
+            date: new Date().toISOString(),
+            src: `${baseUrl}/uploads/${file.filename}`, // Full URL to access the file
+            creator: req.cookies.userid // Assuming the creator ID is stored in cookies
+        }));
+
+        // Insert files into the database
+        const fileInsertQueries = fileData.map(file => {
+            return pool.query(
+                'INSERT INTO files (project_id, name, creator, size, date, src) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id;',
+                [projectId, file.name, file.creator, file.size, file.date, file.src]
+            );
+        });
+
+        const fileIds = await Promise.all(fileInsertQueries);
+
+        // Link files to the task
+        const linkTasksToFile = fileIds.map(fileId => {
+            return pool.query(
+                'UPDATE project_tasks SET solution_file_id = $1 WHERE id = $2',
+                [fileId.rows[0].id, taskId] // Assuming task table has a 'solution_file_id' column
+            );
+        });
+
+        await Promise.all(linkTasksToFile);
+
+        res.status(201).json({ message: 'Files uploaded and linked successfully', files: fileData });
+    } catch (error) {
+        console.error('Error uploading files:', error);
+        res.status(500).json({ error: 'Failed to upload files' });
+    }
+});
+
+
+
+// Assign user to task
+// Modify your /assign endpoint to add a notification when a task is assigned
+app.post('/assign', async (req, res) => {
+  const { taskId, userId } = req.body;
+  try {
+    // Update project tasks
+    const updateQuery = `
+      UPDATE project_Tasks
+      SET assignee = $1
+      WHERE id = $2;
+    `;
+    const result = await pool.query(updateQuery, [userId, taskId]);
+    
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    // Fetch task description from project_Tasks table
+    const taskQuery = ` SELECT description FROM project_Tasks WHERE id = $1;`;
+    const taskResult = await pool.query(taskQuery, [taskId]);
+    const taskDescription = taskResult.rows[0].description;
+
+    // Fetch user's name from users table
+    const userQuery = ` SELECT name FROM users WHERE id = $1; `;
+    const userResult = await pool.query(userQuery, [userId]);
+    const userName = userResult.rows[0].name;
+
+    // Create a notification for the task assignment including task description
+    const notificationQuery = `
+      INSERT INTO notifications (user_id, task_id, message, timestamp)
+      VALUES ($1, $2, $3, NOW());
+    `;
+    const notificationMessage = `New task ${taskDescription} assigned to ${userName}`;
+    await pool.query(notificationQuery, [userId, taskId, notificationMessage]);
+
+    res.json({ message: 'Task assigned successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+
+//updatestatus
+app.post('/updateTaskStatus', async (req, res) => {
+  try {
+    const { taskId, newStatus } = req.body;
+
+    // Validate inputs
+    if (!taskId || !newStatus) {
+      return res.status(400).json({ error: 'Missing taskId or newStatus in request body' });
+    }
+
+    // Update the task status in the database
+    const updateQuery = `
+      UPDATE project_tasks
+      SET status = $1
+      WHERE id = $2;
+    `;
+    const result = await pool.query(updateQuery, [newStatus, taskId]);
+
+    // Check if the task was found and updated
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Task not found or status not updated' });
+    }
+    
+    io.emit('taskUpdated');
+    res.status(200).json({ message: 'Task status updated successfully' });
+  } catch (error) {
+    console.error('Error updating task status:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+
+
+
+
+
+
+io.on('connection', (socket) => {
+    const userId = socket.handshake.query.userId;
+    console.log(`New user connected with ID: ${userId} and socket ID: ${socket.id}`);
+
+    socket.on('chatMessage', async (data) => {
+        const { projectId, message } = data;
+        try {
+            const query = 'INSERT INTO chat_messages (project_id, user_id, message, timestamp) VALUES ($1, $2, $3, $4)';
+            await pool.query(query, [projectId, userId, message, new Date()]);
+            io.emit('newMessage', { userId, message, projectId, timestamp: new Date() }); // Broadcast to all clients
+            console.log(`Message from ${userId}: ${message}`);
+        } catch (error) {
+            console.error(`Failed to save message: ${error}`);
+            socket.emit('errorMessage', 'Failed to send message due to server error.');
+        }
     });
 
     socket.on('disconnect', () => {
-        console.log('User disconnected');
+        console.log(`User ${userId} disconnected`);
     });
 });
+
+
+
+
+  app.get('/chat/:projectId', async (req, res) => {
+    const { projectId } = req.params;
+    try {
+        const result = await pool.query('SELECT * FROM chat_messages WHERE project_id = $1 ORDER BY timestamp ASC', [projectId]);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching chat messages:', err);
+        res.status(500).send('Server error fetching messages');
+    }
+});
+
+
