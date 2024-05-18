@@ -7,6 +7,17 @@ const multer = require('multer');
 const path = require('path');
 const { Server } = require("socket.io");
 const cookieParser= require('cookie-parser');
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
+
+// Nodemailer setup
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: 'your-email@gmail.com',
+    pass: 'your-password'
+  }
+});
 
 
 
@@ -43,6 +54,7 @@ app.use((req, res, next) => {
     console.log('Cookies:', req.cookies);  // This will show all cookies
     next();
 });
+
 
 
 const pool = new Pool({
@@ -98,7 +110,23 @@ app.post('/users', async (req, res) => {
   }
 });
 
+// Helper function to send email
+function sendPasswordResetEmail(email, url) {
+  const mailOptions = {
+    from: 'your-email@gmail.com',
+    to: email,
+    subject: 'Password Reset for TaskWave',
+    html: `<p>You requested a password reset. Click the link below to set a new password:</p><p><a href="${url}">${url}</a></p>`
+  };
 
+  transporter.sendMail(mailOptions, function(error, info){
+    if (error) {
+      console.log('Error sending email:', error);
+    } else {
+      console.log('Email sent: ' + info.response);
+    }
+  });
+}
 
 
 ///Registartionnnnnn
@@ -159,7 +187,7 @@ app.post('/signin', (req, res) => {
       if (bcrypt.compareSync(password, user.password)) {
         // Setting a cookie named 'userid' with the user's ID, expires after 1 hour
         res.cookie('userid', user.id, {
-                  maxAge: 3600000,  // 3600000 ms = 1 hour
+                  maxAge: 36000000,  // 3600000 ms = 1 hour
                   httpOnly: false,   // Now the cookie is accessible via JavaScript
                   secure: false,  // Use secure in production (cookie over HTTPS)
                   sameSite: 'Lax'    // Lax same-site policy
@@ -177,6 +205,35 @@ app.post('/signin', (req, res) => {
     }
   });
 });
+
+// Assuming you have a user model and email sending setup
+
+app.post('/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  try {
+    const user = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (user.rows.length === 0) {
+      return res.status(404).json({ message: 'Email not found' });
+    }
+    
+    // Generate a reset token
+    const resetToken = crypto.randomBytes(20).toString('hex');
+    const resetUrl = `http://localhost:3000/reset-password/${resetToken}`;
+
+    // Here you should save the resetToken to the database with an expiration date
+    // Example: saveTokenToDatabase(user.rows[0].id, resetToken);
+
+    // Send password reset email
+    sendPasswordResetEmail(email, resetUrl);
+
+    res.json({ message: 'Reset password link has been sent to your email.' });
+  } catch (error) {
+    console.error('Forgot Password Error:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+
 
 //Logout
 app.get('/logout', (req, res) => {
@@ -460,13 +517,16 @@ app.get('/projects', async (req, res) => {
           SELECT json_agg(DISTINCT files)
           FROM (
             SELECT
+              f.id,
               f.name,
               u4.name AS creator,
               f.size,
               f.date,
-              f.src
+              f.src,
+              pt.description as task_description
             FROM 
               Files f
+              LEFT JOIN Project_Tasks pt ON f.id = pt.solution_file_id
               LEFT JOIN users u4 ON f.creator = u4.id
             WHERE 
               f.project_id = p.id
@@ -621,18 +681,22 @@ app.put('/projects/:projectId', upload.none(), async (req, res) => {
     const { title, description, startdate, workinghours, deadline, creator, leadername, priority, activestatus, team } = req.body;
     let tasks;
 
-    if (typeof req.body.tasks === 'string') {
+    // Attempt to parse tasks if provided as a string or use as-is if already an array
+    if (typeof req.body.tasks === 'string' && req.body.tasks.trim()) {
         try {
             tasks = JSON.parse(req.body.tasks);
         } catch (err) {
             console.error('Error parsing tasks:', err);
             return res.status(400).json({ error: 'Invalid tasks format', details: err.message });
         }
+    } else {
+        tasks = req.body.tasks || [];
     }
 
     try {
         await pool.query('BEGIN');
 
+        // Update project information
         const updateProjectQuery = `
             UPDATE projects SET
                 title = $1, description = $2, startdate = $3, workinghours = $4,
@@ -652,42 +716,39 @@ app.put('/projects/:projectId', upload.none(), async (req, res) => {
             return res.status(404).json({ error: 'Project not found or no data changed' });
         }
 
-        // Retrieve existing tasks for the project
+        // Fetch existing tasks
         const { rows: existingTasks } = await pool.query('SELECT id FROM project_tasks WHERE project_id = $1', [projectId]);
         const existingTaskIds = existingTasks.map(task => task.id);
 
-        // Determine tasks to delete
-        const incomingTaskIds = tasks.filter(task => task.id).map(task => task.id);
-        const tasksToDelete = existingTaskIds.filter(id => !incomingTaskIds.includes(id));
+        // Determine tasks to update or delete
+        const tasksToUpdate = tasks.filter(task => task.id && existingTaskIds.includes(task.id));
+        const tasksToDelete = existingTaskIds.filter(id => !tasks.some(task => task.id === id));
 
-        // Delete tasks not included in the incoming list
+        // Delete tasks not included in the new list
         if (tasksToDelete.length > 0) {
             await pool.query('DELETE FROM project_tasks WHERE id = ANY($1)', [tasksToDelete]);
         }
 
-        // Insert new tasks and update existing ones
+        // Handle each task for update or insert
         tasks.forEach(async task => {
-            if (task.id && existingTaskIds.includes(task.id)) {
-                // Update existing task
-                const updateTaskQuery = `
+            if (task.id && tasksToUpdate.some(t => t.id === task.id)) {
+                // Update existing tasks
+                await pool.query(`
                     UPDATE project_tasks SET
                         description = $1, deadline = $2
                     WHERE id = $3 AND project_id = $4;
-                `;
-                await pool.query(updateTaskQuery, [task.description, new Date(task.deadline).toISOString(), task.id, projectId]);
-            } else {
-                // Insert new task
-                const insertTaskQuery = `
+                `, [task.description, new Date(task.deadline).toISOString(), task.id, projectId]);
+            } else if (!task.id) {
+                // Insert new tasks
+                await pool.query(`
                     INSERT INTO project_tasks (project_id, description, deadline)
                     VALUES ($1, $2, $3);
-                `;
-                await pool.query(insertTaskQuery, [projectId, task.description, new Date(task.deadline).toISOString()]);
+                `, [projectId, task.description, new Date(task.deadline).toISOString()]);
             }
         });
 
-        // Handle team members
-        // Update logic for team members similar to previous examples
-        
+        // Handle team members, if any updates needed
+
         await pool.query('COMMIT');
         res.status(200).json(projectResult.rows[0]);
     } catch (error) {
@@ -697,10 +758,19 @@ app.put('/projects/:projectId', upload.none(), async (req, res) => {
     }
 });
 
+
 //delete
 app.delete('/projects/:id', async (req, res) => {
   const projectId = req.params.id;
   try {
+
+    // First, delete notifications related to all tasks of this project
+    await pool.query(`
+      DELETE FROM notifications 
+      WHERE task_id IN (
+        SELECT id FROM project_tasks WHERE project_id = $1
+      )
+    `, [projectId]);
     // Delete tasks associated with the project from the project_tasks table
     await pool.query('DELETE FROM project_tasks WHERE project_id = $1', [projectId]);
 
@@ -791,9 +861,9 @@ app.post('/projects/:projectId/tasks/:taskId/solutionFiles', upload.array('files
 
 
 // Assign user to task
-// Modify your /assign endpoint to add a notification when a task is assigned
 app.post('/assign', async (req, res) => {
-  const { taskId, userId } = req.body;
+  const { taskId, userId,projectId } = req.body;
+  console.log('projectId',projectId);
   try {
     // Update project tasks
     const updateQuery = `
@@ -817,13 +887,14 @@ app.post('/assign', async (req, res) => {
     const userResult = await pool.query(userQuery, [userId]);
     const userName = userResult.rows[0].name;
 
-    // Create a notification for the task assignment including task description
-    const notificationQuery = `
-      INSERT INTO notifications (user_id, task_id, message, timestamp)
-      VALUES ($1, $2, $3, NOW());
+     // Insert a new notification into the notifications table
+    const notificationMessage = `New task "${taskDescription}" assigned to ${userName} `;
+    const insertNotificationQuery = `
+      INSERT INTO notifications (user_id, task_id, project_id, message, timestamp)
+      VALUES ($1, $2, $3, $4, NOW());
     `;
-    const notificationMessage = `New task ${taskDescription} assigned to ${userName}`;
-    await pool.query(notificationQuery, [userId, taskId, notificationMessage]);
+    await pool.query(insertNotificationQuery, [userId, taskId, projectId, notificationMessage]);
+
 
     res.json({ message: 'Task assigned successfully' });
   } catch (err) {
@@ -865,12 +936,61 @@ app.post('/updateTaskStatus', async (req, res) => {
 });
 
 
+// delete files
+app.delete('/files/:fileId', async (req, res) => {
+    const { fileId } = req.params;
+
+    console.log('Attempting to delete file with ID:', fileId);
+
+    try {
+        // First, check if the file exists in the database
+        const fileQueryResult = await pool.query('SELECT * FROM files WHERE id = $1', [fileId]);
+        if (fileQueryResult.rows.length === 0) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+
+        // Since file exists, proceed to delete the file record from the database
+        const deleteQuery = await pool.query('DELETE FROM files WHERE id = $1', [fileId]);
+        if (deleteQuery.rowCount === 0) {
+            // If no rows were affected, the file was not deleted
+            return res.status(404).json({ error: 'Failed to delete file' });
+        }
+
+        // Return success message
+        res.status(200).json({ message: 'File deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting file:', error);
+        res.status(500).json({ error: 'Internal server error', details: error.message });
+    }
+});
+
+
+
+//// Notifications 
+app.get('/notifications', async (req, res) => {
+    try {
+        const query = `
+            SELECT * FROM notifications
+            ORDER BY timestamp DESC;  
+        `;
+        const result = await pool.query(query);
+        if (result.rows.length > 0) {
+            res.json(result.rows);
+        } else {
+            res.status(404).json({ message: 'No notifications found' });
+        }
+    } catch (error) {
+        console.error('Error retrieving notifications:', error);
+        res.status(500).json({ error: 'Internal server error', details: error.message });
+    }
+});
 
 
 
 
 
 
+////chat
 io.on('connection', (socket) => {
     const userId = socket.handshake.query.userId;
     console.log(`New user connected with ID: ${userId} and socket ID: ${socket.id}`);
@@ -906,5 +1026,28 @@ io.on('connection', (socket) => {
         res.status(500).send('Server error fetching messages');
     }
 });
+
+  //all messages 
+  app.get('/chat', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT 
+                cm.message,
+                cm.timestamp,
+                cm.user_id,
+                cm.project_id,
+                u.name,
+                u.image
+            FROM chat_messages cm
+            JOIN users u ON cm.user_id = u.id
+            ORDER BY cm.timestamp DESC
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching all chat messages with user details:', err);
+        res.status(500).send('Server error fetching messages');
+    }
+});
+
 
 

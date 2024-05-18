@@ -1,0 +1,182 @@
+
+
+        {/* Chat Main Row */}
+        <div className="chat-main-row">
+          {/* Chat Main Wrapper */}
+          <div className="chat-main-wrapper">
+            {/* Chats View */}
+            <div className="col-lg-9 message-view task-view">
+              <div className="chat-window">
+                <div className="fixed-header">
+                  <div className="navbar">
+                    <div className="user-details me-auto">
+                      <div className="float-start user-img">
+                        <Link
+                          className="avatar"
+                          to="/app/profile/employee-profile"
+                          title="Mike Litorus">
+                          <img
+                            src={Avatar_05}
+                            alt=""
+                            className="rounded-circle"
+                          />
+                          <span className="status online" />
+                        </Link>
+                      </div>
+                      <div className="user-info float-start">
+                        <Link
+                          to="/app/profile/employee-profile"
+                          title="Mike Litorus">
+                          <span>Mike Litorus</span>{" "}
+                          <i className="typing-text">Typing...</i>
+                        </Link>
+                        <span className="last-seen">
+                          Last seen today at 7:50 AM
+                        </span>
+                      </div>
+                    </div>
+                    <div className="search-box">
+                      <div className="input-group input-group-sm">
+                        <input
+                          type="text"
+                          placeholder="Search"
+                          className="form-control"
+                        />
+                        <button type="button" className="btn">
+                          <i className="fa fa-search" />
+                        </button>
+                      </div>
+                    </div>
+                    <ul className="nav custom-menu">
+                      <li className="nav-item">
+                        <Link
+                          className="nav-link task-chat profile-rightbar float-end"
+                          id="task_chat"
+                          to="#task_window">
+                          <i className="fa fa-user" />
+                        </Link>
+                      </li>
+                      <li className="nav-item">
+                        <Link
+                          onClick={() =>
+                            localStorage.setItem("minheight", "true")
+                          }
+                          to="/conversation/voice-call"
+                          className="nav-link">
+                          <i className="fa fa-phone" />
+                        </Link>
+                      </li>
+                      <li className="nav-item">
+                        <Link
+                          to="/conversation/video-call"
+                          className="nav-link">
+                          <i className="fa fa-video-camera" />
+                        </Link>
+                      </li>
+                      <li className="nav-item dropdown dropdown-action">
+                        <Link
+                          aria-expanded="false"
+                          data-bs-toggle="dropdown"
+                          className="nav-link dropdown-toggle"
+                          to="#">
+                          <i className="fa fa-cog" />
+                        </Link>
+                        <div className="dropdown-menu dropdown-menu-right">
+                          <Link to="#" className="dropdown-item">
+                            Delete Conversations
+                          </Link>
+                          <Link to="#" className="dropdown-item">
+                            Settings
+                          </Link>
+                        </div>
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+                <div className="chat-contents">
+                  <div className="chat-content-wrap">
+                    <div className="chat-wrap-inner">
+                      <div className="chat-box">
+                        <div className="chats">
+                          {messages.map((msg, index) => (
+                            <div key={index} className={`chat ${msg.user_id === userId.current ? 'chat-right' : 'chat-left'}`}>
+                              {msg.user_id !== userId.current && (
+                                <div className="chat-avatar">
+                                  <Link to="/app/profile/employee-profile" className="avatar">
+                                    <img alt="" src={Avatar_05} /> {/* Update this src based on the user or use a default */}
+                                  </Link>
+                                </div>
+                              )}
+                              <div className="chat-body">
+                                <div className="chat-bubble">
+                                  <div className="chat-content">
+                                    <p>{msg.message}</p>
+                                    <span className="chat-time">{new Date(msg.timestamp).toLocaleTimeString()}</span>
+                                  </div>
+                                  <div className="chat-action-btns">
+                                    <ul>
+                                      <li>
+                                        <Link to="#" className="share-msg" title="Share">
+                                          <i className="fa fa-share-alt" />
+                                        </Link>
+                                      </li>
+                                      <li>
+                                        <Link to="#" className="edit-msg">
+                                          <i className="fa fa-pencil" />
+                                        </Link>
+                                      </li>
+                                      <li>
+                                        <Link to="#" className="del-msg">
+                                          <i className="fa fa-trash" />
+                                        </Link>
+                                      </li>
+                                    </ul>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="chat-footer">
+                  <div className="message-bar">
+                    <div className="message-inner">
+                      <Link
+                        className="link attach-icon"
+                        to="#"
+                        data-bs-toggle="modal"
+                        data-bs-target="#drag_files">
+                        <img src={Attachment} alt="" />
+                      </Link>
+                      <div className="message-area">
+                        <div className="input-group">
+                          <textarea
+                            className="form-control"
+                            placeholder="Type message..."
+                            defaultValue={""}
+                          />
+                          <span className="input-group-append">
+                            <button 
+                                 className="btn btn-custom" 
+                                 type="submit"
+                                 onClick={onSubmit}
+
+                                 >
+                              <i className="fa-solid fa-paper-plane" />
+                            </button>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            {/* /Chats View */}
+          </div>
+          {/* /Chat Main Wrapper */}
+        </div>
+        {/* /Chat Main Row */}

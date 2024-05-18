@@ -1,0 +1,108 @@
+To design a database architecture for your project management system, we'll need to create several tables to represent the different entities and their relationships. Based on the provided information, we can identify the following tables:
+
+Projects: Contains information about each project.
+Project_Tasks: Contains tasks associated with each project.
+Files: Stores information about uploaded files for each project.
+Team: Stores information about team members working on projects.
+Users: Contains information about users involved in the system.
+Let's define the structure for each table:
+
+Projects:
+
+id (Primary Key)
+title
+description
+startDate
+workingHours
+deadline
+creator
+leaderName (Foreign Key referencing Users table)
+priority
+activeStatus
+Project_Tasks:
+
+id (Primary Key)
+project_id (Foreign Key referencing Projects table)
+status
+assignee
+description
+deadline
+Files:
+
+id (Primary Key)
+project_id (Foreign Key referencing Projects table)
+name
+creator
+size
+date
+src
+Team:
+
+id (Primary Key)
+project_id (Foreign Key referencing Projects table)
+name
+role
+image
+Users:
+
+id (Primary Key)
+username
+role
+image
+With this structure, you can establish relationships between tables. For example:
+
+Projects have a one-to-many relationship with Project_Tasks (one project can have multiple tasks).
+Projects have a one-to-many relationship with Files (one project can have multiple files).
+Projects have a one-to-many relationship with Team (one project can have multiple team members).
+Users can be referenced in multiple places (creator, leaderName, assignee, and members of the team).
+Ensure proper indexing and constraints are applied based on your specific database system requirements and performance considerations.
+
+
+
+CREATE TABLE Projects (
+    id SERIAL PRIMARY KEY,
+    title VARCHAR(255),
+    description TEXT,
+    startDate DATE,
+    workingHours INTEGER,
+    deadline DATE,
+    creator INTEGER REFERENCES users(id),
+    leaderName INTEGER REFERENCES users(id),
+    priority VARCHAR(255),
+    activeStatus VARCHAR(255)
+);
+
+
+
+CREATE TABLE Project_Tasks (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER REFERENCES Projects(id),
+    status INTEGER,
+    assignee INTEGER REFERENCES users(id),
+    description TEXT,
+    deadline DATE
+);
+
+
+CREATE TABLE Files (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER REFERENCES Projects(id),
+    name VARCHAR(255),
+    creator INTEGER REFERENCES Users(id),
+    size INTEGER,
+    date DATE,
+    src TEXT
+);
+
+
+
+
+
+
+
+
+
+
+
+
+
