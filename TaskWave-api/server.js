@@ -675,23 +675,11 @@ app.post('/projects', upload.array('files'), async (req, res) => {
 });
 
 
-//update
+//update project details
+
 app.put('/projects/:projectId', upload.none(), async (req, res) => {
     const { projectId } = req.params;
     const { title, description, startdate, workinghours, deadline, creator, leadername, priority, activestatus, team } = req.body;
-    let tasks;
-
-    // Attempt to parse tasks if provided as a string or use as-is if already an array
-    if (typeof req.body.tasks === 'string' && req.body.tasks.trim()) {
-        try {
-            tasks = JSON.parse(req.body.tasks);
-        } catch (err) {
-            console.error('Error parsing tasks:', err);
-            return res.status(400).json({ error: 'Invalid tasks format', details: err.message });
-        }
-    } else {
-        tasks = req.body.tasks || [];
-    }
 
     try {
         await pool.query('BEGIN');
@@ -702,61 +690,37 @@ app.put('/projects/:projectId', upload.none(), async (req, res) => {
                 title = $1, description = $2, startdate = $3, workinghours = $4,
                 deadline = $5, creator = $6, leadername = $7, priority = $8,
                 activestatus = $9
-            WHERE id = $10 RETURNING *;
+            WHERE id = $10;
         `;
         const projectValues = [
             title, description, new Date(startdate).toISOString(), workinghours,
             new Date(deadline).toISOString(), creator, leadername, priority,
             activestatus, projectId
         ];
-        const projectResult = await pool.query(updateProjectQuery, projectValues);
+        await pool.query(updateProjectQuery, projectValues);
 
-        if (projectResult.rowCount === 0) {
-            await pool.query('ROLLBACK');
-            return res.status(404).json({ error: 'Project not found or no data changed' });
+        // Clear existing team members
+        await pool.query('DELETE FROM project_team WHERE project_id = $1', [projectId]);
+
+        // Split and trim team member IDs from the input, then insert them
+        const teamMembers = team.split(',').map(id => parseInt(id.trim()));
+        for (let userId of teamMembers) {
+            const insertQuery = 'INSERT INTO project_team (user_id, project_id) VALUES ($1, $2) ON CONFLICT DO NOTHING;';
+            await pool.query(insertQuery, [userId, projectId]);
         }
-
-        // Fetch existing tasks
-        const { rows: existingTasks } = await pool.query('SELECT id FROM project_tasks WHERE project_id = $1', [projectId]);
-        const existingTaskIds = existingTasks.map(task => task.id);
-
-        // Determine tasks to update or delete
-        const tasksToUpdate = tasks.filter(task => task.id && existingTaskIds.includes(task.id));
-        const tasksToDelete = existingTaskIds.filter(id => !tasks.some(task => task.id === id));
-
-        // Delete tasks not included in the new list
-        if (tasksToDelete.length > 0) {
-            await pool.query('DELETE FROM project_tasks WHERE id = ANY($1)', [tasksToDelete]);
-        }
-
-        // Handle each task for update or insert
-        tasks.forEach(async task => {
-            if (task.id && tasksToUpdate.some(t => t.id === task.id)) {
-                // Update existing tasks
-                await pool.query(`
-                    UPDATE project_tasks SET
-                        description = $1, deadline = $2
-                    WHERE id = $3 AND project_id = $4;
-                `, [task.description, new Date(task.deadline).toISOString(), task.id, projectId]);
-            } else if (!task.id) {
-                // Insert new tasks
-                await pool.query(`
-                    INSERT INTO project_tasks (project_id, description, deadline)
-                    VALUES ($1, $2, $3);
-                `, [projectId, task.description, new Date(task.deadline).toISOString()]);
-            }
-        });
-
-        // Handle team members, if any updates needed
 
         await pool.query('COMMIT');
-        res.status(200).json(projectResult.rows[0]);
+        res.status(200).json({ message: 'Project updated successfully' });
     } catch (error) {
-        console.error('Transaction rolled back due to an error:', error);
         await pool.query('ROLLBACK');
+        console.error('Transaction rolled back due to an error:', error);
         res.status(500).json({ error: 'Database operation failed', details: error.message });
     }
 });
+
+
+
+
 
 
 //delete
