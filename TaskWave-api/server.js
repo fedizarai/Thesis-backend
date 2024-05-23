@@ -47,11 +47,11 @@ app.use('/uploads', express.static('uploads'));
 
 
 app.use((req, res, next) => {
-    console.log(req.headers.cookie);  // Log the Cookie header
+    
     next();
 });
 app.use((req, res, next) => {
-    console.log('Cookies:', req.cookies);  // This will show all cookies
+    
     next();
 });
 
@@ -67,7 +67,7 @@ const pool = new Pool({
 
 
  const server = app.listen(3001, ()=> {
-  console.log('app is runnning on port 3001');
+  
 })
 
 /////////CHATTTT
@@ -131,8 +131,11 @@ function sendPasswordResetEmail(email, url) {
 
 ///Registartionnnnnn
 
+
+const { v4: uuidv4 } = require('uuid'); // Assuming you have uuid package for generating random names
+
 app.post('/register', (req, res) => {
-  const { name, username, birthdate, gender, reportTo, address, role, employee_id, email, password, mobile, joindate, project, position } = req.body;
+  const { email, password } = req.body;
 
   // Check if the provided email already exists in the database
   const emailExistsQuery = 'SELECT COUNT(*) FROM users WHERE email = $1';
@@ -158,8 +161,23 @@ app.post('/register', (req, res) => {
         res.json({ message: 'Password updated successfully' });
       });
     } else {
-      // If email does not exist, return an error message
-      return res.status(403).json({ error: 'Email is not allowed to have an account' });
+      // If email does not exist, add the user with a random name and hashed password
+      const randomName = `user_${uuidv4()}`;
+      const hash = bcrypt.hashSync(password);
+
+      const addUserQuery = `
+        INSERT INTO users (name, username, email, password)
+        VALUES ($1, $2, $3, $4)
+      `;
+      const addUserValues = [randomName, randomName, email, hash];
+
+      pool.query(addUserQuery, addUserValues, (addErr, addResult) => {
+        if (addErr) {
+          console.error(addErr);
+          return res.status(500).send('Server error during user registration');
+        }
+        res.json({ message: 'User registered successfully' });
+      });
     }
   });
 });
@@ -195,13 +213,14 @@ app.post('/signin', (req, res) => {
         
         // Log the cookie that has been set
         
+        console.log(user.position);
+        res.json({ message: 'success', position: user.position }); // Indicate success if passwords match
 
-        res.json({ message: 'success' }); // Indicate success if passwords match
       } else {
-        res.status(400).json({ message: 'error logging in' }); // Indicate error if passwords do not match
+        return res.status(400).json({ message: 'error logging in' }); // Indicate error if passwords do not match
       }
     } else {
-      res.status(400).json({ message: 'User not found' }); // Indicate error if user is not found
+      return res.status(400).json({ message: 'User not found' }); // Indicate error if user is not found
     }
   });
 });
@@ -411,7 +430,7 @@ app.post('/addEmployee', async (req, res) => {
       [name, role, employee_id, email, position, report_to, birthdate, join_date]
     );
 
-    console.log('Employee added successfully:', result.rows[0]);
+    
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error('Error adding employee:', err);
@@ -580,8 +599,7 @@ app.post('/projects', upload.array('files'), async (req, res) => {
  
   const { title, description,  workinghours, creator, leadername, priority, activestatus, team } = req.body;
   const files = req.files; // Accessing files from multer
-  console.log('Body:', req.body);
-  console.log('Files:', req.files);
+  
 
   let { tasks } = req.body;
   
@@ -596,7 +614,7 @@ app.post('/projects', upload.array('files'), async (req, res) => {
     }
   }
 
-  console.log(typeof tasks, tasks);
+
 
 
   const startdate = new Date(req.body.startdate).toISOString();
@@ -827,7 +845,7 @@ app.post('/projects/:projectId/tasks/:taskId/solutionFiles', upload.array('files
 // Assign user to task
 app.post('/assign', async (req, res) => {
   const { taskId, userId,projectId } = req.body;
-  console.log('projectId',projectId);
+  
   try {
     // Update project tasks
     const updateQuery = `
@@ -1013,5 +1031,5 @@ io.on('connection', (socket) => {
     }
 });
 
-
+module.exports = { app, server, pool };
 
